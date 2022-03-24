@@ -28,8 +28,7 @@ class CrackDataset(Dataset):
         self.filename = [f for f in os.listdir(image_folder)] 
 
     def __len__(self): 
-        return 2
-#        return len(self.filename)
+        return len(self.filename)
 
     def __getitem__(self, idx): 
 
@@ -39,13 +38,14 @@ class CrackDataset(Dataset):
         gt_file = '%s/gt/%s.bmp' % (self.folder, filename.split('.')[0]) 
        
         img = cv2.imread(image_file) 
-        gt = cv2.imread(gt_file, 0)
+        gt = cv2.imread(gt_file, 0)[:,:,None]
 
-        img = Image.fromarray(img)
-        gt = Image.fromarray(gt) 
-
-        img = self.transform(img) 
-        gt = self.transform(gt) 
+        data = np.concatenate([img, gt], 2) 
+        data = Image.fromarray(data)
+        data = self.transform(data)
+       
+        img, gt = data[:3], data[3:]
+        img = (img - 0.5) / 0.5  # normalization 
 
         return img, gt 
 
@@ -53,13 +53,33 @@ class CrackDataset(Dataset):
 if __name__ == '__main__': 
 
     parser = argparse.ArgumentParser(description='DeepCrack') 
-    parser.add_argument('--batch', type=int, default=2)
+    parser.add_argument('--batch', type=int, default=4) 
     parser.add_argument('--epoch', type=int, default=100)
+    parser.add_argument('--gpu_ids', nargs='+', type=int, default=None)
     args = parser.parse_args()
 
     model = DeepCrack()
 
+    if torch.cuda.device_count() > 1:
+        if args.gpu_ids == None:
+            print("Let's use", torch.cuda.device_count(), "GPUs!")
+            device = torch.device('cuda:0')
+        else:
+            print("Let's use", len(args.gpu_ids), "GPUs!")
+            device = torch.device("cuda:" + str(args.gpu_ids[0]))
+    else:
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
     optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5) 
+
+    model = torch.nn.DataParallel(model, device_ids=args.gpu_ids)
+    model.to(device)
+
+    for state in optimizer.state.values():
+        for k, v in state.items():
+            if torch.is_tensor(v):
+                state[k] = v.to(device)
+
 
     loss = torch.nn.BCEWithLogitsLoss() 
 
@@ -68,7 +88,6 @@ if __name__ == '__main__':
         transforms.RandomVerticalFlip(), 
         transforms.RandomCrop((512,512)),
         transforms.ToTensor(), 
-        transforms.Normalize(mean=(0.5), std=(0.5))
     ])
    
     root_folder = 'datasets/CrackTree260' 
@@ -82,8 +101,8 @@ if __name__ == '__main__':
 
         for inputs, targets in data_loader: 
 
-            inputs_ = torchvision.utils.make_grid(inputs, 10, 1) 
-            targets_ = torchvision.utils.make_grid(targets, 10, 1) 
+            inputs = inputs.to(device) 
+            targets = targets.to(device) 
 
             optimizer.zero_grad() 
             pred_output, pred_fuse5, pred_fuse4, pred_fuse3, pred_fuse2, pred_fuse1 = model(inputs)
