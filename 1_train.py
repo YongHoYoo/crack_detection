@@ -58,6 +58,8 @@ if __name__ == '__main__':
     parser.add_argument('--gpu_ids', nargs='+', type=int, default=None)
     args = parser.parse_args()
 
+    model_file = 'model.pt' 
+
     model = DeepCrack()
 
     if torch.cuda.device_count() > 1:
@@ -71,6 +73,16 @@ if __name__ == '__main__':
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5) 
+
+    # load model
+    if os.path.isfile(model_file):
+        print('Load saved model')
+        checkpoint = torch.load(model_file, map_location=torch.device('cpu'))
+        init_epoch = checkpoint['epoch']
+        model.load_state_dict(checkpoint['state_dict'])  # , strict=False)
+        optimizer.load_state_dict(checkpoint['optimizer'])
+    else:
+        init_epoch = -1
 
     model = torch.nn.DataParallel(model, device_ids=args.gpu_ids)
     model.to(device)
@@ -95,7 +107,7 @@ if __name__ == '__main__':
     dataset = CrackDataset(root_folder, transform) 
     data_loader = torch.utils.data.DataLoader(dataset=dataset, batch_size=args.batch, shuffle=True) 
 
-    for epoch in range(args.epoch): 
+    for epoch in range(init_epoch+1, args.epoch): 
 
         err = [] 
 
@@ -122,3 +134,10 @@ if __name__ == '__main__':
             optimizer.step() 
 
         print('Epoch %2d : %f' % (epoch, sum(err)/len(err)))
+
+        model_dictionary = {'epoch': epoch,
+            'state_dict': list(model.children())[0].state_dict(),
+            'optimizer': optimizer.state_dict(),
+        }
+
+        torch.save(model_dictionary, model_file)
